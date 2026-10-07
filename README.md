@@ -66,10 +66,16 @@ Ver [`docs/RUTAS.md`](docs/RUTAS.md).
 | Servicio | Para qué |
 |---|---|
 | `SecurityService` | hash/verificación de contraseñas, tokens, CSRF, cabeceras |
+| `AuthTokenService` | sesiones en BD (tabla `auth_tokens`), revocar/expulsar usuarios |
 | `ValidationService` / `Validator` | validación de datos con reglas |
 | `PaginationService` | paginar arrays o query builders |
 | `SessionService` | leer/escribir sesión y flash |
 | `CookieService` | cookies seguras (HttpOnly/SameSite) |
+
+El login incluye **"Recordarme"** (`REMEMBER_DAYS`, por defecto 7 días). Cada sesión
+se guarda como token (hash SHA-256) en `auth_tokens`, así puedes expulsar a cualquier
+usuario con `revoke_user_tokens($id)`. La IP real detrás de Cloudflare/BunnyCDN se
+obtiene con `client_ip()` (configura `TRUSTED_PROXIES`).
 
 Ver [`docs/SERVICIOS.md`](docs/SERVICIOS.md).
 

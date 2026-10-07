@@ -23,15 +23,7 @@ class AuthController
         $email = trim($post['email'] ?? '');
         $password = $post['password'] ?? '';
 
-        if (attempt($email, $password)) {
-            if (isset($post['remember'])) {
-                $user = user();
-                $token = bin2hex(random_bytes(32));
-                setcookie('remember_token', $token, time() + 604800, '/');
-                $user->remember_token = $token;
-                $user->save();
-            }
-
+        if (attempt($email, $password, isset($post['remember']))) {
             return redirect(route('dashboard'));
         }
 
@@ -70,8 +62,7 @@ class AuthController
         $user->password = password_hash($_POST['password'], PASSWORD_DEFAULT);
         $user->save();
 
-        auth()->set('user', $user);
-        auth()->set('token', generate_jwt($user));
+        login_user($user);
 
         return redirect(route('dashboard'), ['type' => 'success', 'message' => 'Registro exitoso.']);
     }
@@ -138,8 +129,9 @@ class AuthController
         }
 
         $user->password = password_hash($request->post('password'), PASSWORD_DEFAULT);
-        $user->remember_token = null;
         $user->save();
+
+        revoke_user_tokens($user->id);
 
         return redirect(route('login'), ['type' => 'success', 'message' => 'Contraseña actualizada correctamente. Ahora puedes iniciar sesión.']);
     }

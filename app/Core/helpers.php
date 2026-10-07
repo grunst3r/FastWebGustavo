@@ -1,6 +1,7 @@
 <?php
 
 use App\Core\Mail;
+use App\Models\AuthToken;
 use App\Models\User;
 use eftec\bladeone\BladeOne;
 use Symfony\Component\HttpFoundation\Session\Session;
@@ -145,31 +146,206 @@ if (!function_exists('verify_csrf')) {
     }
 }
 
-// Helpers de usuario
-if (!function_exists('attempt')) {
-    function attempt(string $email, string $password): bool
+// IP real del cliente (Cloudflare, BunnyCDN y proxies)
+if (!function_exists('client_ip')) {
+    function client_ip(): ?string
     {
-        $user = User::where('email', $email)->first();
-        if ($user && password_verify($password, $user->password)) {
-            auth()->set('user', $user);
-            auth()->set('token', generate_jwt($user));
+        if (!trust_proxy_headers()) {
+            return is_valid_ip($_SERVER['REMOTE_ADDR'] ?? null);
+        }
+
+        $candidates = [];
+
+        // Cabeceras de CDN/proxy que apuntan al cliente original.
+        foreach (['HTTP_CF_CONNECTING_IP', 'HTTP_TRUE_CLIENT_IP', 'HTTP_X_REAL_IP'] as $key) {
+            if (!empty($_SERVER[$key])) {
+                $candidates[] = $_SERVER[$key];
+            }
+        }
+
+        // X-Forwarded-For: el primer valor es el cliente original.
+        if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+            foreach (explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']) as $part) {
+                $candidates[] = $part;
+            }
+        }
+
+        // RFC 7239: Forwarded: for=...
+        if (!empty($_SERVER['HTTP_FORWARDED'])) {
+            if (preg_match_all('/for="?\[?([0-9a-fA-F:.]+)\]?"?/', $_SERVER['HTTP_FORWARDED'], $m)) {
+                foreach ($m[1] as $part) {
+                    $candidates[] = $part;
+                }
+            }
+        }
+
+        $candidates[] = $_SERVER['REMOTE_ADDR'] ?? null;
+
+        $fallback = null;
+        foreach ($candidates as $candidate) {
+            $ip = is_valid_ip(trim((string) $candidate));
+            if ($ip === null) {
+                continue;
+            }
+            if (is_public_ip($ip)) {
+                return $ip;
+            }
+            $fallback = $fallback ?? $ip;
+        }
+
+        return $fallback;
+    }
+}
+
+if (!function_exists('is_valid_ip')) {
+    function is_valid_ip(?string $ip): ?string
+    {
+        if ($ip === null || trim($ip) === '') {
+            return null;
+        }
+
+        $ip = trim(trim($ip), '[]');
+
+        return filter_var($ip, FILTER_VALIDATE_IP) ? $ip : null;
+    }
+}
+
+if (!function_exists('is_public_ip')) {
+    function is_public_ip(string $ip): bool
+    {
+        return filter_var(
+            $ip,
+            FILTER_VALIDATE_IP,
+            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+        ) !== false;
+    }
+}
+
+if (!function_exists('trust_proxy_headers')) {
+    function trust_proxy_headers(): bool
+    {
+        $trusted = trim((string) env('TRUSTED_PROXIES', ''));
+
+        if ($trusted === '') {
+            return false;
+        }
+
+        if ($trusted === '*') {
             return true;
         }
+
+        $remote = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
+
+        foreach (array_map('trim', explode(',', $trusted)) as $proxy) {
+            if ($proxy !== '' && ip_matches_proxy($remote, $proxy)) {
+                return true;
+            }
+        }
+
         return false;
+    }
+}
+
+if (!function_exists('ip_matches_proxy')) {
+    function ip_matches_proxy(string $ip, string $proxy): bool
+    {
+        $ip = is_valid_ip($ip);
+        if ($ip === null) {
+            return false;
+        }
+
+        if (!str_contains($proxy, '/')) {
+            return $ip === $proxy;
+        }
+
+        [$subnet, $bits] = explode('/', $proxy, 2);
+        $subnet = is_valid_ip($subnet);
+        $bits = (int) $bits;
+
+        if ($subnet === null) {
+            return false;
+        }
+
+        $ipBin = inet_pton($ip);
+        $subnetBin = inet_pton($subnet);
+
+        if ($ipBin === false || $subnetBin === false || strlen($ipBin) !== strlen($subnetBin)) {
+            return false;
+        }
+
+        $bytes = intdiv($bits, 8);
+        $remainder = $bits % 8;
+
+        if ($bytes > 0 && substr($ipBin, 0, $bytes) !== substr($subnetBin, 0, $bytes)) {
+            return false;
+        }
+
+        if ($remainder === 0) {
+            return true;
+        }
+
+        $mask = ~((1 << (8 - $remainder)) - 1) & 0xFF;
+
+        return (ord($ipBin[$bytes]) & $mask) === (ord($subnetBin[$bytes]) & $mask);
+    }
+}
+
+// Helpers de usuario
+if (!function_exists('attempt')) {
+    function attempt(string $email, string $password, bool $remember = false): bool
+    {
+        $user = User::where('email', $email)->first();
+
+        if ($user && password_verify($password, $user->password)) {
+            login_user($user, $remember);
+            return true;
+        }
+
+        return false;
+    }
+}
+
+if (!function_exists('login_user')) {
+    function login_user(User $user, bool $remember = false): void
+    {
+        $issued = \App\Services\AuthTokenService::issue($user, $remember);
+
+        auth()->set('user', $user);
+        auth()->set('auth_token_id', $issued['token']->id);
+        auth()->set('token', generate_jwt($user));
+
+        if ($remember) {
+            $days = max(1, (int) env('REMEMBER_DAYS', 7));
+            setcookie(\App\Services\AuthTokenService::COOKIE, $issued['raw'], [
+                'expires' => time() + ($days * 86400),
+                'path' => '/',
+                'httponly' => true,
+                'samesite' => 'Lax',
+            ]);
+            $_COOKIE[\App\Services\AuthTokenService::COOKIE] = $issued['raw'];
+        }
     }
 }
 
 if (!function_exists('logout')) {
     function logout(): void
     {
-        if (auth()->has('user')) {
-            $user = auth()->get('user');
-            if ($user->remember_token) {
-                setcookie('remember_token', '', time() - 3600, '/');
-                $user->remember_token = null;
-                $user->save();
+        $id = auth()->get('auth_token_id');
+        if ($id) {
+            $token = AuthToken::find($id);
+            if ($token) {
+                $token->delete();
             }
         }
+
+        if (isset($_COOKIE[\App\Services\AuthTokenService::COOKIE])) {
+            setcookie(\App\Services\AuthTokenService::COOKIE, '', [
+                'expires' => time() - 3600,
+                'path' => '/',
+            ]);
+            unset($_COOKIE[\App\Services\AuthTokenService::COOKIE]);
+        }
+
         auth()->clear();
     }
 }
@@ -185,15 +361,30 @@ if (!function_exists('user')) {
 if (!function_exists('is_authenticated')) {
     function is_authenticated(): bool
     {
-        if (!auth()->has('user') || !auth()->has('token')) {
+        if (!auth()->has('user') || !auth()->has('auth_token_id')) {
             return false;
         }
 
-        $user = auth()->get('user');
+        $token = AuthToken::find(auth()->get('auth_token_id'));
 
-        return User::where('id', $user->id)
-            ->where('remember_token', $user->remember_token)
-            ->exists();
+        if (!$token || $token->isExpired()) {
+            auth()->remove('user');
+            auth()->remove('auth_token_id');
+            auth()->remove('token');
+            return false;
+        }
+
+        $user = User::find($token->user_id);
+
+        if (!$user) {
+            $token->delete();
+            auth()->clear();
+            return false;
+        }
+
+        auth()->set('user', $user);
+
+        return true;
     }
 }
 
@@ -207,17 +398,67 @@ if (!function_exists('token')) {
 if (!function_exists('autologin')) {
     function autologin()
     {
-        if (!auth()->has('user') && isset($_COOKIE['remember_token'])) {
-            $user = User::where('remember_token', $_COOKIE['remember_token'])->first();
-            if ($user) {
-                auth()->set('user', $user);
-                auth()->set('token', generate_jwt($user));
-                return true;
-            } else {
-                setcookie('remember_token', '', time() - 3600, '/');
-            }
+        if (auth()->has('user')) {
+            return false;
         }
-        return false;
+
+        $raw = $_COOKIE[\App\Services\AuthTokenService::COOKIE] ?? '';
+
+        if ($raw === '') {
+            return false;
+        }
+
+        $token = \App\Services\AuthTokenService::find($raw);
+
+        if (!$token) {
+            setcookie(\App\Services\AuthTokenService::COOKIE, '', [
+                'expires' => time() - 3600,
+                'path' => '/',
+            ]);
+            unset($_COOKIE[\App\Services\AuthTokenService::COOKIE]);
+            return false;
+        }
+
+        $user = User::find($token->user_id);
+
+        if (!$user) {
+            $token->delete();
+            return false;
+        }
+
+        auth()->set('user', $user);
+        auth()->set('auth_token_id', $token->id);
+        auth()->set('token', generate_jwt($user));
+        \App\Services\AuthTokenService::touch($token);
+
+        return true;
+    }
+}
+
+// Revocacion de accesos (expulsar usuarios o dispositivos)
+if (!function_exists('revoke_user_tokens')) {
+    function revoke_user_tokens(int $userId): int
+    {
+        return \App\Services\AuthTokenService::revokeUser($userId);
+    }
+}
+
+if (!function_exists('revoke_token')) {
+    function revoke_token(int $id): bool
+    {
+        $token = AuthToken::find($id);
+        if (!$token) {
+            return false;
+        }
+        $token->delete();
+        return true;
+    }
+}
+
+if (!function_exists('auth_tokens')) {
+    function auth_tokens(int $userId)
+    {
+        return \App\Services\AuthTokenService::forUser($userId);
     }
 }
 

@@ -112,10 +112,21 @@ URLs en vistas: `{{ route('admin') }}`.
 Usar la capa `app/Services` en lugar de repetir logica:
 
 - `SecurityService` — `hash`, `check`, `token`, `verifyCsrf`, `headers`.
+- `AuthTokenService` — tokens de sesion en BD (`auth_tokens`), revocacion de sesiones.
 - `validator($datos, $reglas)` / `ValidationService` — validacion (ver `docs/SERVICIOS.md`).
 - `paginate($items, $perPage)` / `PaginationService`.
 - `SessionService` — sesion y flash.
 - `CookieService` — cookies seguras.
+
+## Autenticacion, sesiones y revocacion
+
+- Cada login crea una fila en `auth_tokens` (hash SHA-256); la cookie solo lleva el token en claro.
+- `is_authenticated()` valida el token contra la BD en cada request: **borrar la fila expulsa al usuario**.
+- Helpers: `login_user($user, $remember)`, `attempt($email, $pass, $remember)`, `logout()`,
+  `revoke_user_tokens($userId)`, `revoke_token($id)`, `auth_tokens($userId)`.
+- Duracion de "recordarme": `REMEMBER_DAYS`. Al cambiar contraseña se revocan los tokens.
+- IP real detras de CDN/proxy: usar `client_ip()` (Cloudflare, BunnyCDN, X-Forwarded-For).
+  Configurar `TRUSTED_PROXIES` (`*` o lista de IPs/CIDR). No leer `X-Forwarded-For` a mano.
 
 ## Entorno y configuracion
 

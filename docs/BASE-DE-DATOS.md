@@ -84,6 +84,14 @@ En `database/seeders`. El seeder por defecto crea el usuario admin a partir de `
 php artisan db:seed
 ```
 
+## Tablas incluidas
+
+- `users`: nombre, email, password, `email_verified_at`.
+- `auth_tokens`: una fila por sesion/dispositivo. Campos: `user_id`, `token` (hash
+  SHA-256, unico), `remember`, `expires_at`, `user_agent`, `ip`, `last_used_at`.
+  Permite revocar sesiones (ver `docs/SERVICIOS.md` -> AuthTokenService).
+- `migrations`: control interno de migraciones.
+
 ## Acceso
 
 Dentro del proyecto se usa Eloquent/Query Builder via Capsule:
