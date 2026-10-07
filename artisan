@@ -1,0 +1,75 @@
+#!/usr/bin/env php
+<?php
+
+require __DIR__ . '/bootstrap/app.php';
+
+use App\Core\Migrator;
+use Database\Seeders\DatabaseSeeder;
+
+$command = $argv[1] ?? null;
+
+$guard = function (callable $callback) {
+    try {
+        $callback();
+    } catch (\Throwable $e) {
+        fwrite(STDERR, "\n[ERROR] " . $e->getMessage() . "\n");
+        fwrite(STDERR, "Revisa tu configuracion de base de datos en el archivo .env\n");
+        exit(1);
+    }
+};
+
+switch ($command) {
+    case 'migrate':
+        $guard(function () use ($argv) {
+            $executed = (new Migrator(__DIR__ . '/database/migrations'))->run();
+            echo $executed
+                ? 'Migraciones ejecutadas: ' . count($executed) . "\n"
+                : "No hay migraciones pendientes.\n";
+        });
+        break;
+
+    case 'migrate:fresh':
+        $guard(function () {
+            (new Migrator(__DIR__ . '/database/migrations'))->fresh();
+            echo "Base de datos recreada correctamente.\n";
+        });
+        break;
+
+    case 'db:seed':
+        $guard(function () {
+            echo "Ejecutando seeders...\n";
+            (new DatabaseSeeder())->run();
+            echo "Seeders ejecutados.\n";
+        });
+        break;
+
+    case 'serve':
+        echo "Iniciando servidor en http://localhost:8080\n";
+        shell_exec('php -S localhost:8080 -t public');
+        break;
+
+    case (preg_match('/^make:controller\s*(.+)?$/', (string) $command, $matches) ? true : false):
+        $name = trim($matches[1] ?? '');
+        if ($name === '') {
+            echo "Falta el nombre del controlador.\n";
+            break;
+        }
+        $path = __DIR__ . "/app/Controllers/{$name}.php";
+        if (file_exists($path)) {
+            echo "Ya existe ese controlador.\n";
+            break;
+        }
+        file_put_contents($path, "<?php\n\nnamespace App\\Controllers;\n\nclass {$name}\n{\n    // Métodos del controlador\n}\n");
+        echo "Controlador creado: {$name}\n";
+        break;
+
+    default:
+        echo "Sistema de consola\n";
+        echo "Comandos disponibles:\n";
+        echo "  migrate               Ejecuta las migraciones pendientes\n";
+        echo "  migrate:fresh         Recrea la base de datos\n";
+        echo "  db:seed               Ejecuta los seeders\n";
+        echo "  make:controller NAME  Crea un controlador\n";
+        echo "  serve                 Inicia el servidor de desarrollo\n";
+        break;
+}

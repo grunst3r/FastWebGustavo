@@ -1,0 +1,24 @@
+# Normaliza los finales de linea a LF para que el proyecto se comporte
+# igual en Windows, macOS y Linux al clonarlo.
+* text=auto eol=lf
+
+*.php        text
+*.blade.php  text
+*.json       text
+*.md         text
+*.yml        text
+*.yaml       text
+*.xml        text
+*.dist       text
+
+artisan      text eol=lf
+.gitignore   text eol=lf
+.editorconfig text eol=lf
+
+*.png        binary
+*.jpg        binary
+*.jpeg       binary
+*.gif        binary
+*.ico        binary
+*.sqlite     binary
+*.zip        binary
